@@ -18,6 +18,130 @@ class ARPSnapshot:
         self.reset_detected = False
 
 
+class RouterState:
+    def __init__(self, router_id):
+
+        self.router_id = router_id
+
+        self.previous_snapshot = {}
+
+        self.previous_uptime = None
+
+        self.last_poll_time = None
+
+    def update_state(
+        self,
+        snapshot,
+        uptime
+    ):
+
+        self.previous_snapshot = snapshot
+
+        self.previous_uptime = uptime
+
+        self.last_poll_time = datetime.now()
+
+    def print_state(self):
+
+        print("\n[ROUTER STATE]")
+
+        print(
+            f"Router ID: "
+            f"{self.router_id}"
+        )
+
+        print(
+            f"Previous Snapshot Size: "
+            f"{len(self.previous_snapshot)}"
+        )
+
+        print(
+            f"Previous Uptime: "
+            f"{self.previous_uptime}"
+        )
+
+        print(
+            f"Last Poll Time: "
+            f"{self.last_poll_time}"
+        )
+
+
+# =========================================================
+# ROUTER STATE REGISTRY
+# =========================================================
+
+router_states = {}
+
+
+# =========================================================
+# CREATE INITIAL STATE
+# =========================================================
+
+def create_router_state(router_id):
+
+    print(
+        f"[DEBUG] Creating state for router: "
+        f"{router_id}"
+    )
+
+    state = RouterState(router_id)
+
+    router_states[router_id] = state
+
+    return state
+
+
+# =========================================================
+# GET EXISTING STATE
+# =========================================================
+
+def get_router_state(router_id):
+
+    if router_id not in router_states:
+
+        return create_router_state(router_id)
+
+    return router_states[router_id]
+
+
+# =========================================================
+# EXAMPLE USAGE
+# =========================================================
+
+router_ip = "192.168.1.1"
+
+router_state = get_router_state(router_ip)
+
+router_state.print_state()
+
+
+# =========================================================
+# SIMULATED POLL RESULT
+# =========================================================
+
+new_snapshot = {
+    "10.0.0.1": {
+        "mac": "00:11:22:33:44:55"
+    },
+    "10.0.0.2": {
+        "mac": "AA:BB:CC:DD:EE:FF"
+    }
+}
+
+new_uptime = 4252797800
+
+
+# =========================================================
+# UPDATE ROUTER STATE
+# =========================================================
+
+router_state.update_state(
+    snapshot=new_snapshot,
+    uptime=new_uptime
+)
+
+router_state.print_state()
+
 def parse_input_arguments(argument_string):
     print("[DEBUG] Parsing input arguments")
     
@@ -277,12 +401,16 @@ def main_loop(config):
     
     previous_snapshot = None
     iteration = 0
-    
-    print(f"\n[MONITOR] Starting ARP monitoring on {config['ip']}")
+
+    MAX_ITERATIONS = 3
+
+    print(f"\n[MONITOR] Starting ARP monitoring")
     print(f"[MONITOR] Polling every {config['interval']} seconds")
     print(f"[MONITOR] Press Ctrl+C to stop\n")
     
-    while True:
+    MAX_ITERATIONS = 3
+
+    while iteration < MAX_ITERATIONS:
         try:
             iteration += 1
             print(f"\n[ITERATION] #{iteration} - {datetime.now()}")
