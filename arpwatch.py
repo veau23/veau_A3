@@ -66,16 +66,10 @@ class RouterState:
         )
 
 
-# =========================================================
-# ROUTER STATE REGISTRY
-# =========================================================
 
 router_states = {}
 
 
-# =========================================================
-# CREATE INITIAL STATE
-# =========================================================
 
 def create_router_state(router_id):
 
@@ -91,10 +85,6 @@ def create_router_state(router_id):
     return state
 
 
-# =========================================================
-# GET EXISTING STATE
-# =========================================================
-
 def get_router_state(router_id):
 
     if router_id not in router_states:
@@ -104,9 +94,7 @@ def get_router_state(router_id):
     return router_states[router_id]
 
 
-# =========================================================
-# EXAMPLE USAGE
-# =========================================================
+
 
 router_ip = "192.168.1.1"
 
@@ -114,10 +102,6 @@ router_state = get_router_state(router_ip)
 
 router_state.print_state()
 
-
-# =========================================================
-# SIMULATED POLL RESULT
-# =========================================================
 
 new_snapshot = {
     "10.0.0.1": {
@@ -131,9 +115,6 @@ new_snapshot = {
 new_uptime = 4252797800
 
 
-# =========================================================
-# UPDATE ROUTER STATE
-# =========================================================
 
 router_state.update_state(
     snapshot=new_snapshot,
@@ -235,7 +216,6 @@ def fetch_sysuptime(session, previous_uptime=None):
 def normalize_mac(mac_raw):
     mac_raw = str(mac_raw)
     
-    #print(f"[DEBUG] RAW MAC VALUE: {repr(mac_raw)}")
     
     if mac_raw.startswith("0x"):
         # Handle hex string format
@@ -251,7 +231,7 @@ def normalize_mac(mac_raw):
         
         return mac.lower()
     
-    # Handle octet string format (binary bytes)
+    
     mac = ":".join(
         f"{ord(x):02x}"
         for x in mac_raw
@@ -300,7 +280,7 @@ def fetch_arp_table(session):
         
         print(f"[DEBUG] ENTRY TYPE FOR {ip}: {entry_type}")
         
-        # Skip invalid ARP entries
+        
         if entry_type == 2:
             print(f"[DEBUG] Skipping invalid ARP entry for {ip}")
             continue
@@ -324,10 +304,7 @@ def fetch_arp_table(session):
 
 
 def compare_snapshots(old_snapshot, new_snapshot):
-    """
-    Compare two ARP snapshots and detect changes.
-    Returns a dictionary of detected events.
-    """
+    
     events = {
         "new_hosts": [],
         "gone_hosts": [],
@@ -338,7 +315,6 @@ def compare_snapshots(old_snapshot, new_snapshot):
     old_ips = set(old_snapshot.arp_table.keys()) if old_snapshot else set()
     new_ips = set(new_snapshot.arp_table.keys())
     
-    # New hosts appeared
     new_hosts = new_ips - old_ips
     for ip in new_hosts:
         events["new_hosts"].append({
@@ -347,7 +323,6 @@ def compare_snapshots(old_snapshot, new_snapshot):
             "timestamp": new_snapshot.timestamp
         })
     
-    # Hosts disappeared
     gone_hosts = old_ips - new_ips
     for ip in gone_hosts:
         events["gone_hosts"].append({
@@ -356,7 +331,6 @@ def compare_snapshots(old_snapshot, new_snapshot):
             "timestamp": new_snapshot.timestamp
         })
     
-    # MAC changes for same IP
     common_ips = old_ips & new_ips
     for ip in common_ips:
         old_mac = old_snapshot.arp_table[ip]["mac"]
@@ -370,7 +344,6 @@ def compare_snapshots(old_snapshot, new_snapshot):
                 "timestamp": new_snapshot.timestamp
             })
     
-    # Determine overall status
     if events["new_hosts"] or events["gone_hosts"] or events["mac_changes"]:
         events["status"] = "changed"
     
@@ -378,11 +351,10 @@ def compare_snapshots(old_snapshot, new_snapshot):
 
 
 def print_events(events):
-    """Print detected events in a structured format."""
+    
     if events["status"] == "unchanged":
         print("[INFO] No changes detected in ARP table")
         return
-    
     print(f"\n[EVENTS] {events['status'].upper()} - {datetime.now()}")
     
     for new_host in events["new_hosts"]:
@@ -396,7 +368,6 @@ def print_events(events):
 
 
 def main_loop(config):
-    """Main monitoring loop."""
     session = create_snmp_session(config)
     
     previous_snapshot = None
@@ -415,39 +386,31 @@ def main_loop(config):
             iteration += 1
             print(f"\n[ITERATION] #{iteration} - {datetime.now()}")
             
-            # Fetch sysUpTime
+            
             uptime_result = fetch_sysuptime(session, 
                                           previous_snapshot.sysuptime if previous_snapshot else None)
             
-            # Check for reset event
+            
             if uptime_result.get("reset_detected"):
                 print(f"[RESET_EVENT] Device reset detected at {datetime.now()}")
             
-            # Fetch ARP table
             current_arp_table = fetch_arp_table(session)
-            
-            # Create current snapshot
             current_snapshot = ARPSnapshot()
             current_snapshot.arp_table = current_arp_table
             current_snapshot.sysuptime = uptime_result.get("uptime")
             current_snapshot.reset_detected = uptime_result.get("reset_detected")
             
-            # Compare with previous snapshot if available
             if previous_snapshot:
                 events = compare_snapshots(previous_snapshot, current_snapshot)
                 print_events(events)
                 
-                # Print summary
                 total_changes = (len(events["new_hosts"]) + 
                                len(events["gone_hosts"]) + 
                                len(events["mac_changes"]))
                 if total_changes > 0:
                     print(f"[SUMMARY] Total changes: {total_changes}")
             
-            # Update previous snapshot
             previous_snapshot = current_snapshot
-            
-            # Wait for next poll
             time.sleep(config["interval"])
             
         except KeyboardInterrupt:
@@ -471,7 +434,6 @@ if __name__ == "__main__":
     try:
         config = parse_input_arguments(raw_input_args)
         
-        # For testing mode, run single shot
         if "--test" in sys.argv:
             session = create_snmp_session(config)
             uptime_result = fetch_sysuptime(session)
