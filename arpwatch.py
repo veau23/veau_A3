@@ -301,8 +301,8 @@ def compare_snapshots(old_snapshot, new_snapshot):
 # Print detected network events
 def print_events(events):
     if events["status"] == "unchanged":
-        print("[INFO] No changes detected in ARP table")
         return
+
     print(f"\n[EVENTS] {events['status'].upper()} - {datetime.now()}")
     for new_host in events["new_hosts"]:
         print(
