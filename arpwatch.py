@@ -177,7 +177,7 @@ def fetch_arp_table(session):
     print(f"[DEBUG] Retrieved {len(mac_entries)} MAC entries")
 
     print(f"[DEBUG] Retrieved {len(type_entries)} TYPE entries")
-
+# Match MAC entries with their ARP type values
     type_lookup = {}
 
     for entry in type_entries:
@@ -193,7 +193,7 @@ def fetch_arp_table(session):
         type_lookup[suffix] = int(
             entry.value
         )
-
+# Store valid ARP entries using IP as dictionary key
     arp_table = {}
 
     for entry in mac_entries:
@@ -207,22 +207,12 @@ def fetch_arp_table(session):
         if len(suffix_parts) < 5:
 
             continue
-
-        if_index = int(
-            suffix_parts[0]
-        )
-
-        ip = ".".join(
-            suffix_parts[1:5]
-        )
-
-        suffix = ".".join(
-            suffix_parts
-        )
-
-        entry_type = type_lookup.get(
-            suffix
-        )
+# Get interface index from OID
+        if_index = int(suffix_parts[0])
+# Build device IP address from OID suffix
+        ip = ".".join(suffix_parts[1:5])
+        suffix = ".".join(suffix_parts)
+        entry_type = type_lookup.get(suffix)
 
         print(
             f"[DEBUG] ENTRY TYPE FOR {ip}: "
@@ -236,7 +226,7 @@ def fetch_arp_table(session):
             )
 
             continue
-
+# Convert raw MAC value into standard format
         mac = normalize_mac(entry.value)
 
         parsed_entry = {
@@ -361,11 +351,11 @@ def main_loop(config):
             current_snapshot.arp_table = current_arp_table
             current_snapshot.sysuptime = uptime_result.get("uptime")
             current_snapshot.reset_detected = uptime_result.get("reset_detected")
+            
+            print(f"[DEBUG] Snapshot created | Timestamp: {current_snapshot.timestamp} | ARP entries: {len(current_snapshot.arp_table)}")
+            
             if previous_snapshot:
-                events = compare_snapshots(
-                    previous_snapshot,
-                    current_snapshot
-                )
+                events = compare_snapshots(previous_snapshot,current_snapshot)
                 print_events(events)
                 total_changes = (
                     len(events["new_hosts"]) +
@@ -373,15 +363,14 @@ def main_loop(config):
                     len(events["mac_changes"])
                 )
                 if total_changes > 0:
-                    print(
-                        f"[SUMMARY] Total changes: "
-                        f"{total_changes}"
-                    )
+                    print(f"[SUMMARY] Total changes: "f"{total_changes}")
+# Save current snapshot for next comparison
             previous_snapshot = current_snapshot
 # Save latest router uptime
             state.previous_uptime = uptime_result["uptime"]
 # Save timestamp of successful poll
             state.last_poll_time = datetime.now()
+# Pause before next SNMP poll
             time.sleep(config["interval"])
         except KeyboardInterrupt:
             print(
