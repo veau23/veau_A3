@@ -72,14 +72,21 @@ def get_router_state(router_id):
     return router_states[router_id]
 
 # Read input arguments meant for runtime
-def parse_input_arguments(argument_string):
+def parse_input_arguments(argv):
+
     print("[DEBUG] Parsing input arguments")
-    argument_string = argument_string.strip()
-    parts = argument_string.split(maxsplit=1)
-    interval_part, connection_part = parts
-    interval = float(interval_part)
-    connection_parts = connection_part.split(":")
-    ip, port_str, community = connection_parts
+
+    if len(argv) < 3:
+        raise ValueError(
+            "Usage: python arpwatch.py "
+            "<interval> <ip:port:community> "
+            "[ip:port:community ...]"
+        )
+
+    interval = float(argv[1])
+
+    devices = []
+
     ipv4_pattern = (
         r'^('
         r'(25[0-5]|2[0-4][0-9]|'
@@ -88,19 +95,34 @@ def parse_input_arguments(argument_string):
         r'(25[0-5]|2[0-4][0-9]|'
         r'[01]?[0-9][0-9]?)$'
     )
-    if not re.match(ipv4_pattern, ip):
-        raise ValueError(f"Invalid IP address: {ip}")
-    port = int(port_str)
-    community = community.strip()
-    print(f"[DEBUG] Interval={interval}")
-    print(f"[DEBUG] IP={ip}")
-    print(f"[DEBUG] Port={port}")
-    print(f"[DEBUG] Community={community}")
+
+    for device_string in argv[2:]:
+
+        connection_parts = device_string.split(":")
+
+        if len(connection_parts) != 3:
+            raise ValueError(
+                f"Invalid device format: {device_string}"
+            )
+
+        ip, port_str, community = connection_parts
+
+        if not re.match(ipv4_pattern, ip):
+            raise ValueError(f"Invalid IP address: {ip}")
+
+        device_config = {
+            "ip": ip,
+            "port": int(port_str),
+            "community": community.strip()
+        }
+
+        print(f"[DEBUG] Loaded device: {device_config}")
+
+        devices.append(device_config)
+
     return {
         "interval": interval,
-        "ip": ip,
-        "port": port,
-        "community": community
+        "devices": devices
     }
 
 # Create EasySNMP session with router
@@ -387,38 +409,88 @@ def main_loop(config):
             time.sleep(config["interval"])
 # Program entry point
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
+
+    if len(sys.argv) < 3:
         print(
             "Usage: python arpwatch.py "
-            "\"interval_seconds ip:port:community\""
+            "<interval_seconds> "
+            "<ip:port:community> "
+            "[ip:port:community ...]"
         )
+
         print(
             "Example: python arpwatch.py "
-            "\"5.0 192.168.1.1:161:public\""
+            "5.0 "
+            "192.168.1.1:161:public "
+            "192.168.1.2:161:public"
         )
+
         sys.exit(1)
-    raw_input_args = " ".join(sys.argv[1:])
-    print(f"[DEBUG] Runtime Input: {raw_input_args}")
+
+    print(f"[DEBUG] Runtime Input: {sys.argv[1:]}")
+
     try:
-        config = parse_input_arguments(raw_input_args)
-# Run script in test mode
+
+        config = parse_input_arguments(sys.argv)
+
+        # Run script in test mode
         if "--test" in sys.argv:
-            session = create_snmp_session(config)
-            uptime_result = fetch_sysuptime(session)
-            print("\n[INFO] sysUpTime Result")
-            print(uptime_result)
-            arp_entries = fetch_arp_table(session)
-            print("\n[INFO] FINAL ARP TABLE")
-            for ip, entry in arp_entries.items():
+
+            for device in config["devices"]:
+
                 print(
-                    f"IP: {entry['ip']}, "
-                    f"MAC: {entry['mac']}, "
-                    f"Interface: {entry['ifIndex']}, "
-                    f"Type: {entry['type']}"
+                    f"\n[TEST] Running test for "
+                    f"{device['ip']}"
                 )
+
+                device_config = {
+                    "interval": config["interval"],
+                    "ip": device["ip"],
+                    "port": device["port"],
+                    "community": device["community"]
+                }
+
+                session = create_snmp_session(device_config)
+
+                uptime_result = fetch_sysuptime(session)
+
+                print("\n[INFO] sysUpTime Result")
+                print(uptime_result)
+
+                arp_entries = fetch_arp_table(session)
+
+                print("\n[INFO] FINAL ARP TABLE")
+
+                for ip, entry in arp_entries.items():
+
+                    print(
+                        f"IP: {entry['ip']}, "
+                        f"MAC: {entry['mac']}, "
+                        f"Interface: {entry['ifIndex']}, "
+                        f"Type: {entry['type']}"
+                    )
+
         else:
-# Start continuous monitoring loop
-            main_loop(config)
+
+            # Start monitoring for all devices
+            for device in config["devices"]:
+
+                device_config = {
+                    "interval": config["interval"],
+                    "ip": device["ip"],
+                    "port": device["port"],
+                    "community": device["community"]
+                }
+
+                print(
+                    f"\n[MONITOR] Starting monitor for "
+                    f"{device['ip']}"
+                )
+
+                main_loop(device_config)
+
     except Exception as e:
+
         print(f"[FATAL] Error: {e}")
+
         sys.exit(1)
