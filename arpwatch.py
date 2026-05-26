@@ -257,6 +257,7 @@ def compare_snapshots(old_snapshot, new_snapshot):
         "mac_changes": [],
         "status": "unchanged"
     }
+# Collect IPs from both snapshots
     old_ips = set(old_snapshot.arp_table.keys()) if old_snapshot else set()
     new_ips = set(new_snapshot.arp_table.keys())
 # Detect newly discovered hosts
@@ -267,7 +268,8 @@ def compare_snapshots(old_snapshot, new_snapshot):
             "mac": new_snapshot.arp_table[ip]["mac"],
             "timestamp": new_snapshot.timestamp
         })
-# Detect removed hosts
+        print(f"[DEBUG] NEW_HOST: {ip} -> {new_snapshot.arp_table[ip]['mac']}")
+# Detect hosts that disappeared
     gone_hosts = old_ips - new_ips
     for ip in gone_hosts:
         events["gone_hosts"].append({
@@ -275,11 +277,12 @@ def compare_snapshots(old_snapshot, new_snapshot):
             "mac": old_snapshot.arp_table[ip]["mac"],
             "timestamp": new_snapshot.timestamp
         })
+        print(f"[DEBUG] GONE_HOST: {ip} -> {old_snapshot.arp_table[ip]['mac']}")
+# Compare MAC addresses for existing hosts
     common_ips = old_ips & new_ips
     for ip in common_ips:
         old_mac = old_snapshot.arp_table[ip]["mac"]
         new_mac = new_snapshot.arp_table[ip]["mac"]
-# Detect MAC address changes
         if old_mac != new_mac:
             events["mac_changes"].append({
                 "ip": ip,
@@ -287,12 +290,13 @@ def compare_snapshots(old_snapshot, new_snapshot):
                 "new_mac": new_mac,
                 "timestamp": new_snapshot.timestamp
             })
-    if (
-        events["new_hosts"] or
-        events["gone_hosts"] or
-        events["mac_changes"]
-    ):
+            print(f"[DEBUG] MAC_CHANGE: {ip} {old_mac} -> {new_mac}")
+# Update snapshot status if changes were detected
+    if events["new_hosts"] or events["gone_hosts"] or events["mac_changes"]:
         events["status"] = "changed"
+    else:
+        print("[DEBUG] Snapshot unchanged")
+
     return events
 # Print detected network events
 def print_events(events):
