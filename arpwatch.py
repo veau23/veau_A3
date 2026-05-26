@@ -178,24 +178,6 @@ def fetch_arp_table(session):
 
     print(f"[DEBUG] Retrieved {len(type_entries)} TYPE entries")
 
-    print("\n[DEBUG] RAW MAC ENTRIES")
-
-    for entry in mac_entries:
-
-        print(
-            f"OID={entry.oid}, "
-            f"VALUE={normalize_mac(entry.value)}"
-        )
-
-    print("\n[DEBUG] RAW TYPE ENTRIES")
-
-    for entry in type_entries:
-
-        print(
-            f"OID={entry.oid}, "
-            f"VALUE={entry.value}"
-        )
-#Store ARP entry types for quick lookup
     type_lookup = {}
 
     for entry in type_entries:
@@ -220,10 +202,8 @@ def fetch_arp_table(session):
 
         oid_parts = full_oid.split(".")
 
-# Extract interface index and IP from OID
         suffix_parts = oid_parts[-5:]
 
-# Ignore incomplete OID entries
         if len(suffix_parts) < 5:
 
             continue
@@ -248,20 +228,17 @@ def fetch_arp_table(session):
             f"[DEBUG] ENTRY TYPE FOR {ip}: "
             f"{entry_type}"
         )
-# Ignore invalid ARP records
+
         if entry_type == 2:
 
             print(
-                f"[DEBUG] Skipping invalid "
-                f"ARP entry for {ip}"
+                f"[DEBUG] Skipping invalid ARP entry for {ip}"
             )
 
             continue
 
-        mac = normalize_mac(
-            entry.value
-        )
-# Build structured ARP entry
+        mac = normalize_mac(entry.value)
+
         parsed_entry = {
             "ip": ip,
             "mac": mac,
