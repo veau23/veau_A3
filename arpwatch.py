@@ -362,49 +362,49 @@ def main_loop(config):
             iteration += 1
             print(f"\n[ITERATION] #{iteration} - {datetime.now()}")
             
-            # Start timer for fixed scheduling
+            # Start timer for fixed-rate scheduling
             poll_start_time = time.time()
             
             # Retrieve latest uptime value
-            uptime_result = fetch_sysuptime(
-                session,
-                state.previous_uptime
-            )
+            uptime_result = fetch_sysuptime(session, state.previous_uptime)
+            
             if uptime_result.get("reset_detected"):
-                print(
-                    f"[RESET_EVENT] "
-                    f"Device reset detected "
-                    f"at {datetime.now()}"
-                )
+                print(f"[RESET_EVENT] Device reset detected at {datetime.now()}")
                 
             # Retrieve latest ARP table
             current_arp_table = fetch_arp_table(session)
-            current_snapshot = ARPSnapshot()
-            current_snapshot.arp_table = current_arp_table
-            current_snapshot.sysuptime = uptime_result.get("uptime")
-            current_snapshot.reset_detected = uptime_result.get("reset_detected")
             
-            print(f"[DEBUG] Snapshot created | Timestamp: {current_snapshot.timestamp} | ARP entries: {len(current_snapshot.arp_table)}")
-            
-            if previous_snapshot:
-                events = compare_snapshots(previous_snapshot, current_snapshot)
-                print_events(events)
-                total_changes = (
-                    len(events["new_hosts"]) +
-                    len(events["gone_hosts"]) +
-                    len(events["mac_changes"])
-                )
-                if total_changes > 0:
-                    print(f"[SUMMARY] Total changes: {total_changes}")
-                    
-            # Save current snapshot for next comparison
-            previous_snapshot = current_snapshot
-            # Save latest router uptime
-            state.previous_uptime = uptime_result["uptime"]
-            # Save timestamp of successful poll
+            # Detect failure immediately after both SNMP fetch operations
+            if uptime_result["uptime"] is None or not current_arp_table:
+                print("[TIMEOUT_EVENT] Router did not respond or polling failed")
+                # Saves previous_snapshot so that it is not lost
+            else:
+                # Build snapshot only when polling succeeds
+                current_snapshot = ARPSnapshot()
+                current_snapshot.arp_table = current_arp_table
+                current_snapshot.sysuptime = uptime_result.get("uptime")
+                current_snapshot.reset_detected = uptime_result.get("reset_detected")
+                
+                print(f"[DEBUG] Snapshot created | Timestamp: {current_snapshot.timestamp} | ARP entries: {len(current_snapshot.arp_table)}")
+                
+                if previous_snapshot:
+                    events = compare_snapshots(previous_snapshot, current_snapshot)
+                    print_events(events)
+                    total_changes = (
+                        len(events["new_hosts"]) +
+                        len(events["gone_hosts"]) +
+                        len(events["mac_changes"])
+                    )
+                    if total_changes > 0:
+                        print(f"[SUMMARY] Total changes: {total_changes}")
+                        
+                # Save current snapshot for next comparison only on successful poll
+                previous_snapshot = current_snapshot
+                state.previous_uptime = uptime_result["uptime"]
+                
+            # Update timestamp and maintain fixed rate regardless of timeout
             state.last_poll_time = datetime.now()
             
-             
             elapsed_time = time.time() - poll_start_time
             remaining_sleep = config["interval"] - elapsed_time
             
@@ -418,10 +418,7 @@ def main_loop(config):
                 )
                 
         except KeyboardInterrupt:
-            print(
-                f"\n[STOP] Stopping ARP monitor "
-                f"after {iteration} iterations"
-            )
+            print(f"\n[STOP] Stopping ARP monitor after {iteration} iterations")
             break
         except Exception as e:
             print(f"[ERROR] Iteration failed: {e}")
