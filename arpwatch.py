@@ -365,29 +365,34 @@ def main_loop(config):
             # Start timer for fixed-rate scheduling
             poll_start_time = time.time()
             
-            # Retrieve latest uptime value
+            # Fetch uptime
             uptime_result = fetch_sysuptime(session, state.previous_uptime)
             
-            if uptime_result.get("reset_detected"):
-                print(f"[RESET_EVENT] Device reset detected at {datetime.now()}")
-                
-            # Retrieve latest ARP table
-            current_arp_table = fetch_arp_table(session)
-            
-            # Detect failure immediately after both SNMP fetch operations
-            if uptime_result["uptime"] is None or not current_arp_table:
+            # Handle TIMEOUT
+            if uptime_result["uptime"] is None:
                 print("[TIMEOUT_EVENT] Router did not respond or polling failed")
-                # Saves previous_snapshot so that it is not lost
+                poll_failed = True
             else:
-                # Build snapshot only when polling succeeds
+                poll_failed = False
+                
+                # Handle reset 
+                if uptime_result.get("reset_detected"):
+                    print("[RESET_EVENT] Router reboot detected. Clearing previous baseline.")
+                    previous_snapshot = None  # Discard old baseline
+                
+                # Fetch ARP table
+                current_arp_table = fetch_arp_table(session)
+                
+                # Build current snapshot
                 current_snapshot = ARPSnapshot()
                 current_snapshot.arp_table = current_arp_table
                 current_snapshot.sysuptime = uptime_result.get("uptime")
                 current_snapshot.reset_detected = uptime_result.get("reset_detected")
                 
-                print(f"[DEBUG] Snapshot created | Timestamp: {current_snapshot.timestamp} | ARP entries: {len(current_snapshot.arp_table)}")
+                print(f"[DEBUG] Snapshot created | Timestamp: {current_snapshot.timestamp} | ARP entries: {len(current_arp_table)}")
                 
-                if previous_snapshot:
+                # Compare snapshots 
+                if previous_snapshot and not uptime_result.get("reset_detected"):
                     events = compare_snapshots(previous_snapshot, current_snapshot)
                     print_events(events)
                     total_changes = (
@@ -397,12 +402,14 @@ def main_loop(config):
                     )
                     if total_changes > 0:
                         print(f"[SUMMARY] Total changes: {total_changes}")
-                        
-                # Save current snapshot for next comparison only on successful poll
+                elif uptime_result.get("reset_detected"):
+                    print("[DEBUG] Comparison skipped. Current snapshot establishes new baseline.")
+                
+                # Store current snapshot as the new baseline for next iteration
                 previous_snapshot = current_snapshot
                 state.previous_uptime = uptime_result["uptime"]
                 
-            # Update timestamp and maintain fixed rate regardless of timeout
+            # Update timestamp and maintain fixed rate regardless of timeout/reset
             state.last_poll_time = datetime.now()
             
             elapsed_time = time.time() - poll_start_time
