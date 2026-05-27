@@ -105,7 +105,10 @@ def parse_input_arguments(argv):
                 f"Invalid device format: {device_string}"
             )
 
-        ip, port_str, community = connection_parts
+        ip, port_str, community = [
+    part.strip()
+    for part in connection_parts
+]
 
         if not re.match(ipv4_pattern, ip):
             raise ValueError(f"Invalid IP address: {ip}")
