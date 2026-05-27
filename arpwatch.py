@@ -351,16 +351,21 @@ def main_loop(config):
     state = get_router_state(config["ip"])
     previous_snapshot = None
     iteration = 0
-# Limit iterations during testing
     MAX_ITERATIONS = 3
+    
     print(f"\n[MONITOR] Starting ARP monitoring")
     print(f"[MONITOR] Polling every {config['interval']} seconds")
     print(f"[MONITOR] Press Ctrl+C to stop\n")
+    
     while iteration < MAX_ITERATIONS:
         try:
             iteration += 1
             print(f"\n[ITERATION] #{iteration} - {datetime.now()}")
-# Retrieve latest uptime value
+            
+            # Start timer for fixed scheduling
+            poll_start_time = time.time()
+            
+            # Retrieve latest uptime value
             uptime_result = fetch_sysuptime(
                 session,
                 state.previous_uptime
@@ -371,7 +376,8 @@ def main_loop(config):
                     f"Device reset detected "
                     f"at {datetime.now()}"
                 )
-# Retrieve latest ARP table
+                
+            # Retrieve latest ARP table
             current_arp_table = fetch_arp_table(session)
             current_snapshot = ARPSnapshot()
             current_snapshot.arp_table = current_arp_table
@@ -381,7 +387,7 @@ def main_loop(config):
             print(f"[DEBUG] Snapshot created | Timestamp: {current_snapshot.timestamp} | ARP entries: {len(current_snapshot.arp_table)}")
             
             if previous_snapshot:
-                events = compare_snapshots(previous_snapshot,current_snapshot)
+                events = compare_snapshots(previous_snapshot, current_snapshot)
                 print_events(events)
                 total_changes = (
                     len(events["new_hosts"]) +
@@ -389,15 +395,28 @@ def main_loop(config):
                     len(events["mac_changes"])
                 )
                 if total_changes > 0:
-                    print(f"[SUMMARY] Total changes: "f"{total_changes}")
-# Save current snapshot for next comparison
+                    print(f"[SUMMARY] Total changes: {total_changes}")
+                    
+            # Save current snapshot for next comparison
             previous_snapshot = current_snapshot
-# Save latest router uptime
+            # Save latest router uptime
             state.previous_uptime = uptime_result["uptime"]
-# Save timestamp of successful poll
+            # Save timestamp of successful poll
             state.last_poll_time = datetime.now()
-# Pause before next SNMP poll
-            time.sleep(config["interval"])
+            
+             
+            elapsed_time = time.time() - poll_start_time
+            remaining_sleep = config["interval"] - elapsed_time
+            
+            if remaining_sleep > 0:
+                time.sleep(remaining_sleep)
+            else:
+                print(
+                    f"[WARNING] Poll took {elapsed_time:.2f}s, "
+                    f"exceeding the {config['interval']}s interval. "
+                    f"Skipping sleep to maintain cadence."
+                )
+                
         except KeyboardInterrupt:
             print(
                 f"\n[STOP] Stopping ARP monitor "
