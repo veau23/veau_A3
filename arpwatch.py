@@ -3,7 +3,6 @@ import sys
 import time
 from datetime import datetime
 from easysnmp import Session
-import threading
 
 # SNMP OIDs for polling router information
 SYSUPTIME_OID = "1.3.6.1.2.1.1.3.0"
@@ -32,6 +31,8 @@ class RouterState:
         self.previous_uptime = None
 
         self.last_poll_time = None
+        
+        self.snmp_version = None
 
     def update_state(
         self,
@@ -58,6 +59,7 @@ def create_router_state(router_id):
     return state
 # Return existing router state or create a new one
 def get_router_state(router_id):
+    
     if router_id not in router_states:
         return create_router_state(router_id)
     return router_states[router_id]
@@ -94,38 +96,93 @@ def parse_input_arguments(argv):
                 f"Invalid device format: {device_string}"
             )
 
-        ip, port_str, community = [
-    part.strip()
-    for part in connection_parts
-]
+        ip = connection_parts[0].strip()
+        port_str = connection_parts[1].strip()
+        community = connection_parts[2].strip()
 
-        if not re.match(ipv4_pattern, ip):
-            raise ValueError(f"Invalid IP address: {ip}")
+        if not re.match(
+            ipv4_pattern,
+            ip
+        ):
+            raise ValueError(
+                f"Invalid IP address: {ip}"
+            )
 
-        device_config = {
-            "ip": ip,
-            "port": int(port_str),
-            "community": community.strip()
-        }
-        devices.append(device_config)
+        devices.append(
+            {
+                "ip": ip,
+                "port": int(port_str),
+                "community": community
+            }
+        )
 
     return {
         "interval": interval,
         "devices": devices
     }
-
 # Create EasySNMP session with router
-def create_snmp_session(config):
-    session = Session(
+
+def create_snmp_session(config, version):
+
+    return Session(
         hostname=config["ip"],
         community=config["community"],
-        version=2,
+        version=version,
         remote_port=config["port"],
         timeout=2,
         retries=1
     )
-    return session
+def detect_snmp_version(config, state):
 
+    #
+    # Already detected
+    #
+    if state.snmp_version is not None:
+
+        return create_snmp_session(
+            config,
+            state.snmp_version
+        )
+
+    #
+    # Prefer v2c because the original
+    # implementation always used v2c.
+    #
+    for version in (2, 1):
+
+        try:
+
+            session = create_snmp_session(
+                config,
+                version
+            )
+
+            session.get(
+                SYSUPTIME_OID
+            )
+
+            state.snmp_version = version
+
+            print(
+                f"[INFO] {config['ip']} "
+                f"detected SNMPv{version}",
+                flush=True
+            )
+
+            return session
+
+        except Exception as e:
+
+            print(
+                f"[DEBUG] {config['ip']} "
+                f"SNMPv{version} failed: {e}",
+                flush=True
+            )
+
+    raise RuntimeError(
+        f"No SNMP version works "
+        f"for {config['ip']}"
+    )
 # Poll router uptime and detect reboot
 def fetch_sysuptime(session, previous_uptime=None):
     #print(" Fetching sysUpTime")
@@ -134,7 +191,12 @@ def fetch_sysuptime(session, previous_uptime=None):
         current_uptime = int(response.value)
         #print(f" Current sysUpTime: {current_uptime}")
     except Exception as e:
-        #print(f"[ERROR] Failed to fetch sysUpTime: {e}")
+
+        print(
+            f"SYSUPTIME ERROR: {e}",
+            file=sys.stderr
+        )
+
         return {
             "uptime": None,
             "reset_detected": False
@@ -172,12 +234,21 @@ def fetch_arp_table(session):
 
     try:
 
-        mac_entries = session.walk(ARP_MAC_OID)
+        mac_entries = session.walk(
+            ARP_MAC_OID
+        )
 
-        type_entries = session.walk(ARP_TYPE_OID)
+        type_entries = session.walk(
+            ARP_TYPE_OID
+        )
 
     except Exception as e:
-        print(f"[ERROR] Failed to walk ARP table: {e}")
+
+        print(
+            f"ARP WALK ERROR: {e}",
+            file=sys.stderr
+        )
+
         return None
 
     type_lookup = {}
@@ -275,19 +346,24 @@ def compare_snapshots(router_ip, old_snapshot, new_snapshot):
                 flush=True
             )
 
-# Main polling loop
 def poll_router(config):
 
     router_ip = config["ip"]
 
-    state = get_router_state(router_ip)
+    state = get_router_state(
+        router_ip
+    )
 
     try:
 
+        #
+        # Create or recreate session
+        #
         if state.session is None:
 
-            state.session = create_snmp_session(
-                config
+            state.session = detect_snmp_version(
+                config,
+                state
             )
 
         session = state.session
@@ -297,10 +373,9 @@ def poll_router(config):
             state.previous_uptime
         )
 
-        #
-        # TIMEOUT
-        #
         if uptime_result["uptime"] is None:
+
+            state.session = None
 
             print(
                 f"EVENT|TIMEOUT|{router_ip}",
@@ -309,12 +384,10 @@ def poll_router(config):
 
             return
 
-        #
-        # RESET
-        #
         if (
             state.previous_uptime is not None
-            and uptime_result["reset_detected"]
+            and
+            uptime_result["reset_detected"]
         ):
 
             print(
@@ -324,12 +397,13 @@ def poll_router(config):
 
             state.previous_snapshot = None
 
-        #
-        # ARP TABLE
-        #
-        arp_table = fetch_arp_table(session)
+        arp_table = fetch_arp_table(
+            session
+        )
 
         if arp_table is None:
+
+            state.session = None
 
             print(
                 f"EVENT|TIMEOUT|{router_ip}",
@@ -338,9 +412,6 @@ def poll_router(config):
 
             return
 
-        #
-        # CURRENT SNAPSHOT
-        #
         current_snapshot = ARPSnapshot()
 
         current_snapshot.arp_table = arp_table
@@ -349,10 +420,23 @@ def poll_router(config):
             uptime_result["uptime"]
         )
 
-        #
-        # COMPARE AGAINST PREVIOUS
-        #
-        if state.previous_snapshot is not None:
+        if state.previous_snapshot is None:
+
+            #
+            # First poll:
+            # treat every discovered host as NEW_HOST.
+            #
+            for ip, entry in current_snapshot.arp_table.items():
+
+                print(
+                    f"EVENT|NEW_HOST|"
+                    f"{router_ip}|"
+                    f"{ip}|"
+                    f"{entry['mac']}",
+                    flush=True
+                )
+
+        else:
 
             compare_snapshots(
                 router_ip,
@@ -360,19 +444,13 @@ def poll_router(config):
                 current_snapshot
             )
 
-        #
-        # STORE STATE
-        #
         state.update_state(
             current_snapshot,
             uptime_result["uptime"]
         )
 
-    except Exception as e:
+    except Exception:
 
-        #
-        # Force session recreation next poll
-        #
         state.session = None
 
         print(
@@ -380,44 +458,6 @@ def poll_router(config):
             flush=True
         )
 
-        print(
-            f"[ERROR] {router_ip}: {e}",
-            file=sys.stderr
-        )
-
-def monitor_router(config):
-
-    interval = config["interval"]
-
-    next_poll = time.time()
-
-    while True:
-
-        poll_router(config)
-
-        next_poll += interval
-
-        sleep_time = (
-            next_poll - time.time()
-        )
-
-        if sleep_time > 0:
-
-            time.sleep(sleep_time)
-
-        else:
-
-            print(
-                f"[WARNING] "
-                f"{config['ip']} poll exceeded "
-                f"interval",
-                file=sys.stderr
-            )
-
-            #
-            # Re-anchor schedule
-            #
-            next_poll = time.time()
 
             
 # Program entry point
@@ -462,14 +502,34 @@ if __name__ == "__main__":
                     "community": device["community"]
                 }
 
-                session = create_snmp_session(device_config)
+                test_state = RouterState(
+                    device["ip"]
+                )
 
-                uptime_result = fetch_sysuptime(session)
+                session = detect_snmp_version(
+                    device_config,
+                    test_state
+                )
 
+                print(
+                    f"[INFO] Using SNMPv{test_state.snmp_version}"
+                )
+
+                arp_entries = fetch_arp_table(
+                    session
+                )
+
+                print(
+                    f"[INFO] Retrieved "
+                    f"{len(arp_entries) if arp_entries else 0} "
+                    f"ARP entries"
+                )
+
+                uptime_result = fetch_sysuptime(
+                    session
+                )
                 print("\n[INFO] sysUpTime Result")
                 print(uptime_result)
-
-                arp_entries = fetch_arp_table(session)
 
                 print("\n[INFO] FINAL ARP TABLE")
 
@@ -501,18 +561,20 @@ if __name__ == "__main__":
                 }
             )
 
-        threads = []
+        while True:
 
-        for device in device_configs:
+            cycle_start = time.time()
 
-            thread = threading.Thread(
-                target=monitor_router,
-                args=(device,),
-            )
+            for device in device_configs:
 
-            thread.start()
+                poll_router(device)
 
-            threads.append(thread)
+            elapsed = time.time() - cycle_start
+
+            sleep_time = config["interval"] - elapsed
+
+            if sleep_time > 0:
+                time.sleep(sleep_time)
 
         try:
 
