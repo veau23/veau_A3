@@ -1,0 +1,14 @@
+certifi==2026.4.22
+charset-normalizer==3.4.7
+easysnmp==0.2.6
+idna==3.15
+iniconfig==2.3.0
+packaging==26.2
+pluggy==1.6.0
+pyasn1==0.6.3
+Pygments==2.20.0
+pysnmp==7.1.27
+pysnmp-mibs==0.1.6
+pytest==9.0.3
+requests==2.34.2
+urllib3==2.7.0

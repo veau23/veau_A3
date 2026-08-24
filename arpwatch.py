@@ -8,12 +8,15 @@ from easysnmp import Session
 SYSUPTIME_OID = "1.3.6.1.2.1.1.3.0"
 ARP_MAC_OID = "1.3.6.1.2.1.4.22.1.2"
 ARP_TYPE_OID = "1.3.6.1.2.1.4.22.1.4"
+# VLAN-aware forwarding database
+VLAN_FDB_PORT_OID = "1.3.6.1.2.1.17.7.1.2.2.1.2"
 
 # Stores ARP polling result
 class ARPSnapshot:
     def __init__(self):
         self.timestamp = datetime.now()
         self.arp_table = {}
+        self.vlan_mac_table = {}
         self.sysuptime = None
         self.reset_detected = False
 
@@ -63,6 +66,25 @@ def get_router_state(router_id):
     if router_id not in router_states:
         return create_router_state(router_id)
     return router_states[router_id]
+
+def print_event(
+    router_ip,
+    event_type,
+    ip_address="—",
+    mac_address="—",
+    note=""
+):
+    timestamp = int(time.time())
+
+    print(
+        f"{timestamp} | "
+        f"{router_ip} | "
+        f"{event_type:<11} | "
+        f"{ip_address:<11} | "
+        f"{mac_address:<17} | "
+        f"{note}",
+        flush=True
+    )    
 
 # Read input arguments meant for runtime
 def parse_input_arguments(argv):
@@ -185,11 +207,11 @@ def detect_snmp_version(config, state):
     )
 # Poll router uptime and detect reboot
 def fetch_sysuptime(session, previous_uptime=None):
-    #print(" Fetching sysUpTime")
+
     try:
         response = session.get(SYSUPTIME_OID)
         current_uptime = int(response.value)
-        #print(f" Current sysUpTime: {current_uptime}")
+
     except Exception as e:
 
         print(
@@ -201,12 +223,14 @@ def fetch_sysuptime(session, previous_uptime=None):
             "uptime": None,
             "reset_detected": False
         }
+
     reset_detected = False
+
     if previous_uptime is not None:
-        #print(f" Previous sysUpTime: {previous_uptime}")
+
         if current_uptime < previous_uptime:
             reset_detected = True
-            #print(" RESET EVENT DETECTED: Uptime decreased")
+
     return {
         "uptime": current_uptime,
         "reset_detected": reset_detected
@@ -304,29 +328,98 @@ def fetch_arp_table(session):
 
     return arp_table
 
+# Retrieve MAC addresses learned on each VLAN
+def fetch_vlan_mac_table(session):
+
+    try:
+
+        fdb_entries = session.walk(
+            VLAN_FDB_PORT_OID
+        )
+
+    except Exception as e:
+
+        print(
+            f"VLAN FDB WALK ERROR: {e}",
+            file=sys.stderr
+        )
+
+        return None
+
+    vlan_mac_table = {}
+
+    for entry in fdb_entries:
+
+        # Extract the final 7 components:
+        # VLAN ID + 6 MAC address octets
+        suffix_parts = entry.oid.split(".")[-7:]
+
+        if len(suffix_parts) != 7:
+            continue
+
+        vlan_id = int(
+            suffix_parts[0]
+        )
+
+        mac_parts = suffix_parts[1:7]
+
+        mac = ":".join(
+            f"{int(part):02x}"
+            for part in mac_parts
+        )
+
+        bridge_port = int(
+            entry.value
+        )
+
+        if vlan_id not in vlan_mac_table:
+            vlan_mac_table[vlan_id] = []
+
+        vlan_mac_table[vlan_id].append(
+            {
+                "vlan": vlan_id,
+                "mac": mac,
+                "bridge_port": bridge_port
+            }
+        )
+
+    return vlan_mac_table
 
 # Compare old and new ARP snapshots
 def compare_snapshots(router_ip, old_snapshot, new_snapshot):
 
-    old_ips = set(old_snapshot.arp_table.keys()) if old_snapshot else set()
-    new_ips = set(new_snapshot.arp_table.keys())
+    old_ips = (
+        set(old_snapshot.arp_table.keys())
+        if old_snapshot
+        else set()
+    )
+
+    new_ips = set(
+        new_snapshot.arp_table.keys()
+    )
 
     # NEW HOSTS
     for ip in new_ips - old_ips:
+
         mac = new_snapshot.arp_table[ip]["mac"]
 
-        print(
-            f"EVENT|NEW_HOST|{router_ip}|{ip}|{mac}",
-            flush=True
+        print_event(
+            router_ip,
+            "NEW HOST",
+            ip,
+            mac
         )
 
     # HOST GONE
     for ip in old_ips - new_ips:
+
         mac = old_snapshot.arp_table[ip]["mac"]
 
-        print(
-            f"EVENT|HOST_GONE|{router_ip}|{ip}|{mac}",
-            flush=True
+        print_event(
+            router_ip,
+            "HOST GONE",
+            ip,
+            mac
         )
 
     # MAC CHANGES
@@ -337,13 +430,12 @@ def compare_snapshots(router_ip, old_snapshot, new_snapshot):
 
         if old_mac != new_mac:
 
-            print(
-                f"EVENT|MAC_CHANGED|"
-                f"{router_ip}|"
-                f"{ip}|"
-                f"{old_mac}|"
-                f"{new_mac}",
-                flush=True
+            print_event(
+                router_ip,
+                "MAC CHANGED",
+                ip,
+                new_mac,
+                f"was {old_mac}"
             )
 
 def poll_router(config):
@@ -377,9 +469,9 @@ def poll_router(config):
 
             state.session = None
 
-            print(
-                f"EVENT|TIMEOUT|{router_ip}",
-                flush=True
+            print_event(
+                router_ip,
+                "TIMEOUT"
             )
 
             return
@@ -390,13 +482,16 @@ def poll_router(config):
             uptime_result["reset_detected"]
         ):
 
-            print(
-                f"EVENT|RESET|{router_ip}",
-                flush=True
+            print_event(
+                router_ip,
+                "RESET"
             )
 
             state.previous_snapshot = None
 
+        #
+        # Fetch ARP table
+        #
         arp_table = fetch_arp_table(
             session
         )
@@ -405,13 +500,37 @@ def poll_router(config):
 
             state.session = None
 
-            print(
-                f"EVENT|TIMEOUT|{router_ip}",
-                flush=True
+            print_event(
+                router_ip,
+                "TIMEOUT"
             )
 
             return
 
+        #
+        # Fetch VLAN/MAC table
+        #
+        vlan_mac_table = fetch_vlan_mac_table(
+            session
+        )
+
+        if vlan_mac_table is not None:
+
+            for vlan_id, entries in vlan_mac_table.items():
+
+                for entry in entries:
+
+                    print_event(
+                        router_ip,
+                        "VLAN MAC",
+                        "-",
+                        entry["mac"],
+                        f"VLAN {vlan_id}, bridge port {entry['bridge_port']}"
+                    )
+
+        #
+        # Create current snapshot
+        #
         current_snapshot = ARPSnapshot()
 
         current_snapshot.arp_table = arp_table
@@ -420,6 +539,9 @@ def poll_router(config):
             uptime_result["uptime"]
         )
 
+        #
+        # Compare with previous snapshot
+        #
         if state.previous_snapshot is None:
 
             #
@@ -428,12 +550,11 @@ def poll_router(config):
             #
             for ip, entry in current_snapshot.arp_table.items():
 
-                print(
-                    f"EVENT|NEW_HOST|"
-                    f"{router_ip}|"
-                    f"{ip}|"
-                    f"{entry['mac']}",
-                    flush=True
+                print_event(
+                    router_ip,
+                    "NEW HOST",
+                    ip,
+                    entry["mac"]
                 )
 
         else:
@@ -444,6 +565,9 @@ def poll_router(config):
                 current_snapshot
             )
 
+        #
+        # Store current state
+        #
         state.update_state(
             current_snapshot,
             uptime_result["uptime"]
@@ -453,12 +577,10 @@ def poll_router(config):
 
         state.session = None
 
-        print(
-            f"EVENT|TIMEOUT|{router_ip}",
-            flush=True
+        print_event(
+            router_ip,
+            "TIMEOUT"
         )
-
-
             
 # Program entry point
 if __name__ == "__main__":
@@ -528,18 +650,17 @@ if __name__ == "__main__":
                 uptime_result = fetch_sysuptime(
                     session
                 )
-                print("\n[INFO] sysUpTime Result")
-                print(uptime_result)
+                
 
                 print("\n[INFO] FINAL ARP TABLE")
 
                 for ip, entry in arp_entries.items():
 
-                    print(
-                        f"IP: {entry['ip']}, "
-                        f"MAC: {entry['mac']}, "
-                        f"Interface: {entry['ifIndex']}, "
-                        f"Type: {entry['type']}"
+                    print_event(
+                        device["ip"],
+                        "NEW HOST",
+                        entry["ip"],
+                        entry["mac"]
                     )
 
         else:
