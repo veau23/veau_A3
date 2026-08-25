@@ -266,7 +266,25 @@ def fetch_arp_table(session):
             ARP_TYPE_OID
         )
 
+        # Check how many ARP entries were retrieved
+        print(
+            f"[INFO] ARP MAC entries retrieved: {len(mac_entries)}",
+            flush=True
+        )
+
+        print(
+            f"[INFO] ARP TYPE entries retrieved: {len(type_entries)}",
+            flush=True
+        )
+
     except Exception as e:
+
+        print(
+            f"ARP WALK ERROR: {e}",
+            file=sys.stderr
+        )
+
+        return None
 
         print(
             f"ARP WALK ERROR: {e}",
@@ -325,6 +343,17 @@ def fetch_arp_table(session):
             "ifIndex": if_index,
             "type": entry_type
         }
+
+        print(
+        f"[INFO] ARP table entries after parsing: {len(arp_table)}",
+        flush=True
+        )
+
+        for ip, entry in arp_table.items():
+            print(
+                f"[INFO] Parsed ARP: {ip} -> {entry['mac']}",
+                flush=True
+            )
 
     return arp_table
 
