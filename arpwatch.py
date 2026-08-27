@@ -4,6 +4,12 @@ import time
 from datetime import datetime
 from easysnmp import Session
 
+DEBUG = False
+
+def debug_print(message):
+    if DEBUG:
+        print(message, flush=True)
+
 # SNMP OIDs for polling router information
 SYSUPTIME_OID = "1.3.6.1.2.1.1.3.0"
 ARP_MAC_OID = "1.3.6.1.2.1.4.22.1.2"
@@ -195,10 +201,9 @@ def detect_snmp_version(config, state):
 
         except Exception as e:
 
-            print(
+            debug_print(
                 f"[DEBUG] {config['ip']} "
-                f"SNMPv{version} failed: {e}",
-                flush=True
+                f"SNMPv{version} failed: {e}"
             )
 
     raise RuntimeError(
@@ -266,25 +271,7 @@ def fetch_arp_table(session):
             ARP_TYPE_OID
         )
 
-        # Check how many ARP entries were retrieved
-        print(
-            f"[INFO] ARP MAC entries retrieved: {len(mac_entries)}",
-            flush=True
-        )
-
-        print(
-            f"[INFO] ARP TYPE entries retrieved: {len(type_entries)}",
-            flush=True
-        )
-
     except Exception as e:
-
-        print(
-            f"ARP WALK ERROR: {e}",
-            file=sys.stderr
-        )
-
-        return None
 
         print(
             f"ARP WALK ERROR: {e}",
@@ -309,11 +296,9 @@ def fetch_arp_table(session):
 
     for entry in mac_entries:
 
-        suffix_parts = (
-            entry.oid.split(".")[-5:]
-        )
+        suffix_parts = entry.oid.split(".")[-5:]
 
-        if len(suffix_parts) < 5:
+        if len(suffix_parts) != 5:
             continue
 
         if_index = int(
@@ -332,6 +317,7 @@ def fetch_arp_table(session):
             suffix
         )
 
+        # Ignore invalid ARP entries
         if entry_type == 2:
             continue
 
@@ -344,17 +330,6 @@ def fetch_arp_table(session):
             "type": entry_type
         }
 
-        print(
-        f"[INFO] ARP table entries after parsing: {len(arp_table)}",
-        flush=True
-        )
-
-        for ip, entry in arp_table.items():
-            print(
-                f"[INFO] Parsed ARP: {ip} -> {entry['mac']}",
-                flush=True
-            )
-
     return arp_table
 
 # Retrieve MAC addresses learned on each VLAN
@@ -366,11 +341,17 @@ def fetch_vlan_mac_table(session):
             VLAN_FDB_PORT_OID
         )
 
+        print(
+            f"[INFO] VLAN/FDB entries retrieved: "
+            f"{len(fdb_entries)}",
+            flush=True
+        )
+
     except Exception as e:
 
         print(
-            f"VLAN FDB WALK ERROR: {e}",
-            file=sys.stderr
+            f"[INFO] VLAN/FDB table unavailable: {e}",
+            flush=True
         )
 
         return None
@@ -379,16 +360,16 @@ def fetch_vlan_mac_table(session):
 
     for entry in fdb_entries:
 
-        # Extract the final 7 components:
-        # VLAN ID + 6 MAC address octets
+        debug_print(
+            f"[DEBUG] FDB OID: {entry.oid} | VALUE: {entry.value}"
+        )
+
         suffix_parts = entry.oid.split(".")[-7:]
 
         if len(suffix_parts) != 7:
             continue
 
-        vlan_id = int(
-            suffix_parts[0]
-        )
+        vlan_id = int(suffix_parts[0])
 
         mac_parts = suffix_parts[1:7]
 
@@ -397,9 +378,7 @@ def fetch_vlan_mac_table(session):
             for part in mac_parts
         )
 
-        bridge_port = int(
-            entry.value
-        )
+        bridge_port = int(entry.value)
 
         if vlan_id not in vlan_mac_table:
             vlan_mac_table[vlan_id] = []
@@ -536,14 +515,26 @@ def poll_router(config):
 
             return
 
-        #
-        # Fetch VLAN/MAC table
+                #
+        # Fetch VLAN/MAC forwarding table
         #
         vlan_mac_table = fetch_vlan_mac_table(
             session
         )
 
-        if vlan_mac_table is not None:
+        if vlan_mac_table is None:
+
+            print(
+                f"[INFO] {router_ip} VLAN/FDB table unavailable",
+                flush=True
+            )
+
+        else:
+
+            print(
+                f"[INFO] {router_ip} VLAN/FDB table retrieved",
+                flush=True
+            )
 
             for vlan_id, entries in vlan_mac_table.items():
 
@@ -602,9 +593,14 @@ def poll_router(config):
             uptime_result["uptime"]
         )
 
-    except Exception:
+    except Exception as e:
 
         state.session = None
+
+        print(
+            f"[ERROR] {router_ip}: {type(e).__name__}: {e}",
+            flush=True
+        )
 
         print_event(
             router_ip,
@@ -634,7 +630,15 @@ if __name__ == "__main__":
     #print(f" Runtime Input: {sys.argv[1:]}")
 
     try:
-        args = [arg for arg in sys.argv if arg != "--test"]
+        
+
+        DEBUG = "-d" in sys.argv or "--debug" in sys.argv
+
+        args = [
+            arg for arg in sys.argv
+            if arg not in ("--test", "-d", "--debug")
+        ]
+
         config = parse_input_arguments(args)
         # Run script in test mode
         if "--test" in sys.argv:
