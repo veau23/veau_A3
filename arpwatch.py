@@ -117,7 +117,7 @@ def parse_input_arguments(argv):
 
     for device_string in argv[2:]:
 
-        connection_parts = device_string.split(":")
+        connection_parts = device_string.split(":", 2)
 
         if len(connection_parts) != 3:
             raise ValueError(
@@ -130,16 +130,33 @@ def parse_input_arguments(argv):
 
         if not re.match(
             ipv4_pattern,
-            ip
-        ):
+                                ip
+            ):
             raise ValueError(
                 f"Invalid IP address: {ip}"
+            )
+
+        if not port_str.isdigit():
+            raise ValueError(
+                f"Invalid SNMP port: {port_str}"
+            )
+
+        port = int(port_str)
+
+        if not 1 <= port <= 65535:
+            raise ValueError(
+                f"Invalid SNMP port: {port}"
+            )
+
+        if not community:
+            raise ValueError(
+                "SNMP community cannot be empty"
             )
 
         devices.append(
             {
                 "ip": ip,
-                "port": int(port_str),
+                "port": port,
                 "community": community
             }
         )
@@ -242,21 +259,78 @@ def fetch_sysuptime(session, previous_uptime=None):
     }
 # Convert MAC addresses into readable format
 def normalize_mac(mac_raw):
-    mac_raw = str(mac_raw)
-    if mac_raw.startswith("0x"):
-        hex_string = mac_raw.replace("0x", "")
-        if len(hex_string) % 2 != 0:
-            hex_string = "0" + hex_string
-        mac = ":".join(
-            hex_string[i:i + 2]
-            for i in range(0, len(hex_string), 2)
+
+    if isinstance(mac_raw, bytes):
+
+        if len(mac_raw) != 6:
+            raise ValueError(
+                f"Unexpected MAC byte length: {len(mac_raw)}"
+            )
+
+        return ":".join(
+            f"{byte:02x}"
+            for byte in mac_raw
         )
-        return mac.lower()
-    mac = ":".join(
-        f"{ord(x):02x}"
-        for x in mac_raw
+
+    mac_raw = str(mac_raw).strip()
+
+    if mac_raw.startswith("0x"):
+
+        hex_string = mac_raw[2:]
+
+        if len(hex_string) != 12:
+            raise ValueError(
+                f"Unexpected hexadecimal MAC format: {mac_raw!r}"
+            )
+
+        if not re.fullmatch(
+            r"[0-9a-fA-F]{12}",
+            hex_string
+        ):
+            raise ValueError(
+                f"Invalid hexadecimal MAC format: {mac_raw!r}"
+            )
+
+        return ":".join(
+            hex_string[i:i + 2].lower()
+            for i in range(0, 12, 2)
+        )
+
+    if re.fullmatch(
+        r"[0-9a-fA-F]{2}([:-][0-9a-fA-F]{2}){5}",
+        mac_raw
+    ):
+
+        parts = re.split(
+            r"[:-]",
+            mac_raw
+        )
+
+        return ":".join(
+            part.lower()
+            for part in parts
+        )
+
+    if re.fullmatch(
+        r"[0-9a-fA-F]{12}",
+        mac_raw
+    ):
+
+        return ":".join(
+            mac_raw[i:i + 2].lower()
+            for i in range(0, 12, 2)
+        )
+
+    if len(mac_raw) == 6:
+
+        return ":".join(
+            f"{ord(byte):02x}"
+            for byte in mac_raw
+        )
+
+    raise ValueError(
+        f"Unexpected MAC address format: {mac_raw!r}"
     )
-    return mac.lower()
 # Retrieve and parse ARP table entries
 
 def fetch_arp_table(session):
@@ -364,21 +438,59 @@ def fetch_vlan_mac_table(session):
             f"[DEBUG] FDB OID: {entry.oid} | VALUE: {entry.value}"
         )
 
-        suffix_parts = entry.oid.split(".")[-7:]
+        oid_parts = entry.oid.split(".")
 
-        if len(suffix_parts) != 7:
+        if len(oid_parts) < 7:
+            continue
+
+        suffix_parts = oid_parts[-7:]
+
+        if not all(
+            part.isdigit()
+            for part in suffix_parts
+        ):
+            debug_print(
+                f"[DEBUG] Unexpected FDB OID format: {entry.oid}"
+            )
             continue
 
         vlan_id = int(suffix_parts[0])
 
+        if not 1 <= vlan_id <= 4094:
+            debug_print(
+                f"[DEBUG] Invalid VLAN ID: {vlan_id}"
+            )
+            continue
+
         mac_parts = suffix_parts[1:7]
+
+        if len(mac_parts) != 6:
+            debug_print(
+                f"[DEBUG] Invalid FDB MAC index: {entry.oid}"
+            )
+            continue
+
+        if not all(
+            0 <= int(part) <= 255
+            for part in mac_parts
+        ):
+            debug_print(
+                f"[DEBUG] Invalid MAC bytes in OID: {entry.oid}"
+            )
+            continue
 
         mac = ":".join(
             f"{int(part):02x}"
             for part in mac_parts
         )
 
-        bridge_port = int(entry.value)
+        try:
+            bridge_port = int(entry.value)
+        except (TypeError, ValueError):
+            debug_print(
+                f"[DEBUG] Unexpected bridge-port value: {entry.value!r}"
+            )
+            continue
 
         if vlan_id not in vlan_mac_table:
             vlan_mac_table[vlan_id] = []
@@ -515,7 +627,7 @@ def poll_router(config):
 
             return
 
-                #
+        #
         # Fetch VLAN/MAC forwarding table
         #
         vlan_mac_table = fetch_vlan_mac_table(
@@ -554,6 +666,8 @@ def poll_router(config):
         current_snapshot = ARPSnapshot()
 
         current_snapshot.arp_table = arp_table
+
+        current_snapshot.vlan_mac_table = vlan_mac_table
 
         current_snapshot.sysuptime = (
             uptime_result["uptime"]
